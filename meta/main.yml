@@ -1,0 +1,12 @@
+# meta/main.yml
+galaxy_info:
+  namespace: ovijmek-namespace        # all lowercase: letters, numbers, underscores
+  role_name: my_nginx_role      # all lowercase: letters, numbers, underscores
+  author: You
+  description: Test Nginx role
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Ubuntu
+      versions: ["jammy"]
+dependencies: []

@@ -1,0 +1,43 @@
+---
+driver:
+  name: ec2
+
+dependency:
+  name: galaxy
+
+provisioner:
+  name: ansible
+  config_options:
+    defaults:
+      host_key_checking: false
+      verbosity: 1
+    ssh_connection:
+      pipelining: true
+  env:
+    ANSIBLE_FORCE_COLOR: "1"
+    ANSIBLE_LOAD_CALLBACK_PLUGINS: "1"
+    ANSIBLE_INVENTORY: "${MOLECULE_EPHEMERAL_DIRECTORY}/inventory/hosts"
+    MOLECULE_INVENTORY_FILE: "${MOLECULE_EPHEMERAL_DIRECTORY}/inventory/hosts"
+  playbooks:
+    create: create.yml
+    prepare: prepare.yml
+    converge: converge.yml
+    verify: verify.yml
+    destroy: destroy.yml
+  options:
+    diff: true
+    force_handlers: true
+
+scenario:
+  name: default
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - destroy

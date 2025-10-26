@@ -1,0 +1,47 @@
+---
+# Bootstrap: rebuild inventory from Molecule's instance_config.yml
+- name: Load instance from Molecule instance_config and (re)populate inventory
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Read Molecule instance configuration
+      ansible.builtin.slurp:
+        path: "{{ molecule_instance_config }}"
+      register: instance_conf_raw
+      failed_when: false
+
+    - name: Parse instance configuration
+      ansible.builtin.set_fact:
+        instance_conf: >-
+          {{ (instance_conf_raw.content | b64decode | from_yaml)
+             if (instance_conf_raw is defined and instance_conf_raw.content is defined)
+             else [] }}
+
+    - name: Add ephemeral host to inventory
+      ansible.builtin.add_host:
+        name: "{{ item.address }}"
+        groups: all
+        ansible_user: "{{ item.user }}"
+        ansible_ssh_private_key_file: "{{ item.identity_file }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      loop: "{{ instance_conf }}"
+      when: instance_conf | length > 0
+      changed_when: false
+
+# Your original prepare steps
+- name: Prepare EC2 instance(s)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH to be ready
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Ensure Python 3 is available (dnf/yum/apt)
+      ansible.builtin.raw: >
+        test -e /usr/bin/python3 || (
+          (command -v dnf && sudo dnf -y install python3) ||
+          (command -v yum && sudo yum -y install python3) ||
+          (sudo apt-get update && sudo apt-get -y install python3)
+        )
+      changed_when: false

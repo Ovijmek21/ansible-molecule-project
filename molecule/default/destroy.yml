@@ -1,0 +1,49 @@
+---
+- name: Destroy EC2 instance(s)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  collections:
+    - amazon.aws
+
+  vars:
+    region: eu-central-1
+
+  tasks:
+    - name: Read Molecule instance configuration (if it exists)
+      slurp:
+        src: "{{ molecule_instance_config }}"
+      register: instance_conf_raw
+      ignore_errors: true
+
+    - name: Parse instance configuration
+      set_fact:
+        instance_conf: "{{ instance_conf_raw['content'] | b64decode | from_yaml }}"
+      when: instance_conf_raw is defined and instance_conf_raw.content is defined
+
+    - name: Extract instance public IP(s)
+      set_fact:
+        instance_addresses: "{{ instance_conf | map(attribute='address') | list }}"
+      when: instance_conf is defined
+
+    - name: Find instances to terminate
+      amazon.aws.ec2_instance_info:
+        region: "{{ region }}"
+        filters:
+          "network-interface.addresses.association.public-ip": "{{ item }}"
+      loop: "{{ instance_addresses | default([]) }}"
+      register: ec2_info
+      when: instance_addresses is defined
+
+    - name: Terminate instances
+      amazon.aws.ec2_instance:
+        instance_ids: "{{ item.instances | map(attribute='instance_id') | list }}"
+        state: terminated
+        region: "{{ region }}"
+      loop: "{{ ec2_info.results | default([]) }}"
+      when: item.instances | length > 0
+
+    - name: Remove Molecule instance config file
+      file:
+        path: "{{ molecule_instance_config }}"
+        state: absent

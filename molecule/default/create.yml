@@ -1,0 +1,74 @@
+---
+- name: Create EC2 instance(s)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  collections:
+    - amazon.aws
+
+  vars:
+    molecule_ephemeral_dir: "{{ lookup('env','MOLECULE_EPHEMERAL_DIRECTORY') | default('/tmp', true) }}"
+    molecule_hosts_file: "{{ molecule_ephemeral_dir }}/inventory/hosts"
+    molecule_instance_config: "{{ lookup('env', 'MOLECULE_INSTANCE_CONFIG') | default('/tmp/molecule_instance_config.yml', true) }}"
+
+  tasks:
+    - name: Launch EC2 instance
+      amazon.aws.ec2_instance:
+        name: molecule-nginx-test
+        key_name: ansible-key
+        instance_type: t3.small
+        region: eu-central-1
+        image_id: ami-007e5e8392e6b3d34
+        vpc_subnet_id: subnet-0751f334df9146282
+        security_group: rocky9-sg
+        wait: true
+        state: running
+        network:
+          assign_public_ip: true
+        tags:
+          Name: molecule-nginx-test
+      register: ec2
+
+    - name: Show instance details
+      debug:
+        msg: "Created EC2 instance with public IP: {{ ec2.instances[0].public_ip_address }}"
+
+    - name: Add new instance to Molecule inventory
+      add_host:
+        name: "{{ ec2.instances[0].public_ip_address }}"
+        groups: all
+        ansible_user: rocky
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+    - name: Build Molecule instance configuration
+      set_fact:
+        instance_conf:
+          - instance: molecule-nginx-test
+            address: "{{ ec2.instances[0].public_ip_address }}"
+            user: rocky
+            port: 22
+            identity_file: "~/.ssh/ansible-key.pem"
+            ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+    - name: Write instance configuration to file
+      copy:
+        dest: "{{ molecule_instance_config }}"
+        content: "{{ instance_conf | to_nice_yaml }}"
+      delegate_to: localhost
+
+
+    - name: Ensure Molecule inventory dir exists
+      file:
+        path: "{{ molecule_ephemeral_dir }}/inventory"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Write dynamic Ansible inventory for later phases
+      copy:
+        dest: "{{ molecule_hosts_file }}"
+        mode: "0644"
+        content: |
+          [all]
+          {{ ec2.instances[0].public_ip_address }} ansible_user=rocky ansible_ssh_private_key_file=~/.ssh/ansible-key.pem ansible_ssh_common_args='-o StrictHostKeyChecking=no' ansible_port=22
+      delegate_to: localhost
