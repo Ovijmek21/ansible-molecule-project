@@ -1,47 +1,68 @@
 ---
-# Bootstrap: rebuild inventory from Molecule's instance_config.yml
-- name: Load instance from Molecule instance_config and (re)populate inventory
+- name: Build IP-based inventory from Molecule instance_config
   hosts: localhost
   gather_facts: false
+  vars:
+    molecule_instance_config: "{{ lookup('env', 'MOLECULE_INSTANCE_CONFIG') | default('/tmp/molecule_instance_config.yml', true) }}"
   tasks:
-    - name: Read Molecule instance configuration
+    - name: Show MOLECULE_INSTANCE_CONFIG path
+      ansible.builtin.debug:
+        msg: "MOLECULE_INSTANCE_CONFIG = {{ molecule_instance_config }}"
+
+    - name: Stat instance_config.yml
+      ansible.builtin.stat:
+        path: "{{ molecule_instance_config }}"
+      register: ic_stat
+
+    - name: Log if instance_config is missing (skip prepare gracefully)
+      ansible.builtin.debug:
+        msg: "instance_config.yml not found at {{ molecule_instance_config }}. Did `molecule create` fail?"
+      when: not ic_stat.stat.exists
+
+    - name: Read instance_config.yml
       ansible.builtin.slurp:
         path: "{{ molecule_instance_config }}"
       register: instance_conf_raw
-      failed_when: false
+      when: ic_stat.stat.exists
 
     - name: Parse instance configuration
       ansible.builtin.set_fact:
-        instance_conf: >-
-          {{ (instance_conf_raw.content | b64decode | from_yaml)
-             if (instance_conf_raw is defined and instance_conf_raw.content is defined)
-             else [] }}
+        instance_conf: "{{ instance_conf_raw.content | b64decode | from_yaml | default([]) }}"
+      when: ic_stat.stat.exists
 
-    - name: Add ephemeral host to inventory
+    - name: Log if no instances found
+      ansible.builtin.debug:
+        msg: "No instances found in {{ molecule_instance_config }}. Driver EC2 didn't create any."
+      when:
+        - ic_stat.stat.exists
+        - (instance_conf | default([])) | length == 0
+
+    - name: Show parsed instances
+      ansible.builtin.debug:
+        var: instance_conf
+      when:
+        - ic_stat.stat.exists
+        - (instance_conf | default([])) | length > 0
+
+    - name: Add IP-based hosts to a dedicated group
       ansible.builtin.add_host:
         name: "{{ item.address }}"
-        groups: all
-        ansible_user: "{{ item.user }}"
-        ansible_ssh_private_key_file: "{{ item.identity_file }}"
-        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
-      loop: "{{ instance_conf }}"
-      when: instance_conf | length > 0
-      changed_when: false
+        groups: molecule_instances
+        ansible_host: "{{ item.address }}"
+        ansible_user: "{{ item.user | default('rocky') }}"
+        ansible_ssh_private_key_file: "{{ item.identity_file | default('~/.ssh/ansible-key.pem') }}"
+        ansible_ssh_common_args: "{{ item.ansible_ssh_common_args | default('-o StrictHostKeyChecking=no') }}"
+        ansible_port: "{{ item.port | default(22) }}"
+      loop: "{{ instance_conf | default([]) }}"
+      when:
+        - ic_stat.stat.exists
+        - (instance_conf | default([])) | length > 0
 
-# Your original prepare steps
-- name: Prepare EC2 instance(s)
-  hosts: all
+- name: Wait for SSH on all created instances (by IP)
+  hosts: molecule_instances
   gather_facts: false
   tasks:
-    - name: Wait for SSH to be ready
+    - name: wait_for_connection
       ansible.builtin.wait_for_connection:
+        delay: 0
         timeout: 300
-
-    - name: Ensure Python 3 is available (dnf/yum/apt)
-      ansible.builtin.raw: >
-        test -e /usr/bin/python3 || (
-          (command -v dnf && sudo dnf -y install python3) ||
-          (command -v yum && sudo yum -y install python3) ||
-          (sudo apt-get update && sudo apt-get -y install python3)
-        )
-      changed_when: false

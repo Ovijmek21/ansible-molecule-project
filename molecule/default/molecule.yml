@@ -2,42 +2,42 @@
 driver:
   name: ec2
 
-dependency:
-  name: galaxy
+platforms:
+  - name: molecule-nginx-test-rocky9
+    image: ami-007e5e8392e6b3d34
+    instance_type: t3.small
+    region: eu-central-1
+    vpc_subnet_id: subnet-0751f334df9146282
+    security_group_name: sg-078392883a5da779c
+    key_name: ansible-key
+    assign_public_ip: true
+    ssh_user: rocky
+    tags:
+      Name: molecule-nginx-test-rocky9
+      Role: molecule-nginx-test
+      OS: rocky9
+
+  - name: molecule-nginx-test-rocky10
+    image: ami-0cc981a72e8dba54e
+    instance_type: t3.small
+    region: eu-central-1
+    vpc_subnet_id: subnet-0751f334df9146282
+    security_group_name: sg-078392883a5da779c
+    key_name: ansible-key
+    assign_public_ip: true
+    ssh_user: rocky
+    tags:
+      Name: molecule-nginx-test-rocky10
+      Role: molecule-nginx-test
+      OS: rocky10
 
 provisioner:
   name: ansible
-  config_options:
-    defaults:
-      host_key_checking: false
-      verbosity: 1
-    ssh_connection:
-      pipelining: true
-  env:
-    ANSIBLE_FORCE_COLOR: "1"
-    ANSIBLE_LOAD_CALLBACK_PLUGINS: "1"
-    ANSIBLE_INVENTORY: "${MOLECULE_EPHEMERAL_DIRECTORY}/inventory/hosts"
-    MOLECULE_INVENTORY_FILE: "${MOLECULE_EPHEMERAL_DIRECTORY}/inventory/hosts"
   playbooks:
-    create: create.yml
     prepare: prepare.yml
     converge: converge.yml
     verify: verify.yml
     destroy: destroy.yml
-  options:
-    diff: true
-    force_handlers: true
 
-scenario:
-  name: default
-  test_sequence:
-    - dependency
-    - cleanup
-    - destroy
-    - syntax
-    - create
-    - prepare
-    - converge
-    - idempotence
-    - verify
-    - destroy
+verifier:
+  name: ansible

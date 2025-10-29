@@ -1,36 +1,9 @@
 ---
-# Bootstrap: rebuild inventory from Molecule's instance_config.yml
-- name: Load instance from Molecule instance_config and (re)populate inventory
-  hosts: localhost
-  gather_facts: false
-  tasks:
-    - name: Read Molecule instance configuration
-      ansible.builtin.slurp:
-        path: "{{ molecule_instance_config }}"
-      register: instance_conf_raw
-      failed_when: false
-
-    - name: Parse instance configuration
-      ansible.builtin.set_fact:
-        instance_conf: >-
-          {{ (instance_conf_raw.content | b64decode | from_yaml)
-             if (instance_conf_raw is defined and instance_conf_raw.content is defined)
-             else [] }}
-
-    - name: Add ephemeral host to inventory
-      ansible.builtin.add_host:
-        name: "{{ item.address }}"
-        groups: all
-        ansible_user: "{{ item.user }}"
-        ansible_ssh_private_key_file: "{{ item.identity_file }}"
-        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
-      loop: "{{ instance_conf }}"
-      when: instance_conf | length > 0
-      changed_when: false
-
-- name: Configure Nginx
+- name: Converge
   hosts: all
+  gather_facts: true
   become: true
+
   tasks:
     - name: Ensure Nginx is installed
       ansible.builtin.package:
