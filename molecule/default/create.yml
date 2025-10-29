@@ -1,5 +1,5 @@
 ---
-- name: Create EC2 instance(s)
+- name: Create EC2 instance(s) for Molecule
   hosts: localhost
   connection: local
   gather_facts: false
@@ -7,68 +7,104 @@
     - amazon.aws
 
   vars:
+    region: eu-central-1
+    key_name: ansible-key
+    instance_type: t3.small
+    subnet_id: subnet-0751f334df9146282
+
+    security_group_id: ""
+    security_group_name: rocky9-sg
+
+    ssh_user: rocky
+    identity_file: ~/.ssh/ansible-key.pem
+
+    platforms:
+      - name: molecule-nginx-test-rocky9
+        image_id: ami-007e5e8392e6b3d34
+        tags:
+          Name: molecule-nginx-test-rocky9
+          Role: molecule-nginx-test
+          OS: rocky9
+      - name: molecule-nginx-test-rocky10
+        image_id: ami-0cc981a72e8dba54e
+        tags:
+          Name: molecule-nginx-test-rocky10
+          Role: molecule-nginx-test
+          OS: rocky10
+
     molecule_ephemeral_dir: "{{ lookup('env','MOLECULE_EPHEMERAL_DIRECTORY') | default('/tmp', true) }}"
     molecule_hosts_file: "{{ molecule_ephemeral_dir }}/inventory/hosts"
     molecule_instance_config: "{{ lookup('env', 'MOLECULE_INSTANCE_CONFIG') | default('/tmp/molecule_instance_config.yml', true) }}"
 
   tasks:
-    - name: Launch EC2 instance
+    - name: Launch EC2 instances (Rocky 9 and 10)
       amazon.aws.ec2_instance:
-        name: molecule-nginx-test
-        key_name: ansible-key
-        instance_type: t3.small
-        region: eu-central-1
-        image_id: ami-007e5e8392e6b3d34
-        vpc_subnet_id: subnet-0751f334df9146282
-        security_group: rocky9-sg
+        name: "{{ item.name }}"
+        key_name: "{{ key_name }}"
+        instance_type: "{{ instance_type }}"
+        region: "{{ region }}"
+        image_id: "{{ item.image_id }}"
+        vpc_subnet_id: "{{ subnet_id }}"
+        security_group: "{{ security_group_id | default(security_group_name, true) }}"
         wait: true
         state: running
         network:
           assign_public_ip: true
-        tags:
-          Name: molecule-nginx-test
-      register: ec2
+        tags: "{{ item.tags }}"
+      loop: "{{ platforms }}"
+      register: ec2_results
 
-    - name: Show instance details
-      debug:
-        msg: "Created EC2 instance with public IP: {{ ec2.instances[0].public_ip_address }}"
+    - name: Init instance_conf list
+      ansible.builtin.set_fact:
+        instance_conf: []
 
-    - name: Add new instance to Molecule inventory
-      add_host:
-        name: "{{ ec2.instances[0].public_ip_address }}"
-        groups: all
-        ansible_user: rocky
-        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
-
-    - name: Build Molecule instance configuration
-      set_fact:
-        instance_conf:
-          - instance: molecule-nginx-test
-            address: "{{ ec2.instances[0].public_ip_address }}"
-            user: rocky
-            port: 22
-            identity_file: "~/.ssh/ansible-key.pem"
-            ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
-
-    - name: Write instance configuration to file
-      copy:
-        dest: "{{ molecule_instance_config }}"
-        content: "{{ instance_conf | to_nice_yaml }}"
-      delegate_to: localhost
-
+    - name: Append instances to instance_conf
+      ansible.builtin.set_fact:
+        instance_conf: >-
+          {{
+            instance_conf + [
+              {
+                'instance': item.item.name,
+                'instance_id': item.instances[0].instance_id,
+                'address': item.instances[0].public_ip_address,
+                'user': ssh_user,
+                'port': 22,
+                'identity_file': identity_file,
+                'ansible_ssh_common_args': '-o StrictHostKeyChecking=no'
+              }
+            ]
+          }}
+      loop: "{{ ec2_results.results }}"
 
     - name: Ensure Molecule inventory dir exists
-      file:
+      ansible.builtin.file:
         path: "{{ molecule_ephemeral_dir }}/inventory"
         state: directory
         mode: "0755"
-      delegate_to: localhost
+
+    - name: Write instance configuration to file (MOLECULE_INSTANCE_CONFIG)
+      ansible.builtin.copy:
+        dest: "{{ molecule_instance_config }}"
+        content: "{{ instance_conf | to_nice_yaml }}"
+
+    - name: Show path written
+      ansible.builtin.debug:
+        msg: "Wrote instance_config.yml to {{ molecule_instance_config }}"
 
     - name: Write dynamic Ansible inventory for later phases
-      copy:
+      ansible.builtin.copy:
         dest: "{{ molecule_hosts_file }}"
         mode: "0644"
         content: |
           [all]
-          {{ ec2.instances[0].public_ip_address }} ansible_user=rocky ansible_ssh_private_key_file=~/.ssh/ansible-key.pem ansible_ssh_common_args='-o StrictHostKeyChecking=no' ansible_port=22
-      delegate_to: localhost
+          {% for i in instance_conf -%}
+          {{ i.address }} ansible_user={{ i.user }} ansible_ssh_private_key_file={{ i.identity_file }} ansible_ssh_common_args='{{ i.ansible_ssh_common_args }}' ansible_port={{ i.port }}
+          {% endfor -%}
+
+    - name: Show created instances
+      ansible.builtin.debug:
+        msg: >-
+          Created:
+          {% for i in instance_conf -%}
+          {{ i.instance }} ({{ i.instance_id }}) -> {{ i.address }}
+          {% endfor -%}

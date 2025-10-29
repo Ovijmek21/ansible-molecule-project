@@ -1,8 +1,10 @@
 ---
-# Bootstrap: rebuild inventory from Molecule's instance_config.yml
+
 - name: Load instance from Molecule instance_config and (re)populate inventory
   hosts: localhost
   gather_facts: false
+  vars:
+    molecule_instance_config: "{{ lookup('env', 'MOLECULE_INSTANCE_CONFIG') | default('/tmp/molecule_instance_config.yml', true) }}"
   tasks:
     - name: Read Molecule instance configuration
       ansible.builtin.slurp:
@@ -17,13 +19,14 @@
              if (instance_conf_raw is defined and instance_conf_raw.content is defined)
              else [] }}
 
-    - name: Add ephemeral host to inventory
+    - name: Add ephemeral host(s) to inventory
       ansible.builtin.add_host:
         name: "{{ item.address }}"
         groups: all
-        ansible_user: "{{ item.user }}"
-        ansible_ssh_private_key_file: "{{ item.identity_file }}"
-        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+        ansible_user: "{{ item.user | default('rocky') }}"
+        ansible_ssh_private_key_file: "{{ item.identity_file | default('~/.ssh/ansible-key.pem') }}"
+        ansible_ssh_common_args: "{{ item.ansible_ssh_common_args | default('-o StrictHostKeyChecking=no') }}"
+        ansible_port: "{{ item.port | default(22) }}"
       loop: "{{ instance_conf }}"
       when: instance_conf | length > 0
       changed_when: false
@@ -32,13 +35,33 @@
   hosts: all
   gather_facts: false
   tasks:
+    - name: Wait for HTTP port to be open
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 80
+        delay: 0
+        timeout: 60
+
     - name: Check if Nginx is responding
       ansible.builtin.uri:
-        url: http://localhost
+        url: http://127.0.0.1/
         return_content: true
       register: web
+      retries: 5
+      delay: 2
+      until: web.status == 200
 
-    - name: Assert Nginx response contains expected content
+    - name: Assert Nginx response is OK and contains expected content
       ansible.builtin.assert:
         that:
-          - "'nginx' in web.content | lower"
+          - web.status == 200
+          - "'nginx' in (web.content | lower)"
+
+    - name: Nginx should be active
+      ansible.builtin.command: systemctl is-active nginx
+      register: nginx_status
+      changed_when: false
+
+    - ansible.builtin.assert:
+        that:
+          - nginx_status.stdout == 'active'
